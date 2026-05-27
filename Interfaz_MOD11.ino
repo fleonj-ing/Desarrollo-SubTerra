@@ -55,6 +55,7 @@
   static volatile bool hayAgua = false;
   static volatile bool hayTierra = false;
   static volatile bool vl53ReadyFlag = false;
+  static volatile bool vl53NotReadyFlag = false;
   static volatile bool linkPongRecibido = false;
   static volatile bool hayNuevaLecturaVl53 = false;
   static volatile bool hayTiempoInicio = false;
@@ -118,44 +119,46 @@
   const unsigned long rampInterval = 10;  // ms entre pasos de rampa
   const int rampStep = 1;                 // cuánto cambia por paso
   long newPosition = 0;
-//
+// Variables varias
 
-bool cienPct = false;
-bool tresPct = false;
-bool dosPct  = false;
-bool unoPct  = false;
-bool zeroPct = false;
+  bool cienPct = false;
+  bool tresPct = false;
+  bool dosPct  = false;
+  bool unoPct  = false;
+  bool zeroPct = false;
 
-int SD_MHZ = 20;
+  int SD_MHZ = 20;
 
-int queDist = 2;
-int barridos = 1;
-int flagUndo = 0;
-int flagBoton = 0;
-int resolucion = 5;
-int totalVueltasf = 0;
-int inicioControlado = 0;
-float profundidad = 0;
+  int queDist = 2;
+  int barridos = 1;
+  int flagUndo = 0;
+  int flagBoton = 0;
+  int resolucion = 5;
+  int totalVueltasf = 0;
+  int inicioControlado = 0;
+  float profundidad = 0;
 
-///////////////////////
-const float originX = -16;   // offset en X (mm)
-const float originY = 0.0;    // offset en Y
-int Z=0;
-int X ;  
-int Y ;
-unsigned long EscInicio = 0;
-unsigned long EscTotal = 0;
-bool regresando = false;
+  ///////////////////////
+  const float originX = -16;   // offset en X (mm)
+  const float originY = 0.0;    // offset en Y
+  int Z=0;
+  int X ;  
+  int Y ;
+  unsigned long EscInicio = 0;
+  unsigned long EscTotal = 0;
+  bool regresando = false;
 
-const char archivoCrudo[] = "TempoTimeF.txt"; // archivo temporal de datos crudos
+  const char archivoCrudo[] = "TempoTimeF.txt"; // archivo temporal de datos crudos
+  
+  bool finalDatos = false;
 // -----------------------------
 
 void setup() {
   // Inicializa el UART del RS-485 y parser robusto
   initBattery();
   motorBegin();
-  Serial.begin(9600);
-  comms.begin(9600, COMMS_RX_PIN, COMMS_TX_PIN);
+  Serial.begin(115200);
+  comms.begin(115200, COMMS_RX_PIN, COMMS_TX_PIN);
   Serial.println("HOLA");
 
   tft.begin();
@@ -497,6 +500,7 @@ void actualizarPantalla(){
 //  ||LISTO|| AGREGAR Z+=??? - DETERMINAR EL VALOR EN CM DE CADA PULSO DEL ENCODER    NO ES PROFUNDIDAD CREAR VARIABLE CON FORMULA NUEVA ENCODER
 void esc_manual(){
   Z = 0;
+  myEnc.write(0);
   cambioModoTitulo();
   tft.print("Escaneo Manual");
   tft.setTextColor(ILI9341_WHITE,UI_NAVY);
@@ -516,7 +520,10 @@ void esc_manual(){
     bool flagUp = true;
     bool flagDown = true;
   while(true){
-
+    int positionManual = 0;
+    positionManual = myEnc.read();
+    float metros = positionManual / 105000.0;
+    Z = metros / 1000.0;
     // refrescar estados en bucles bloqueantes
     btnSelect.update();
     btnUp.update();
@@ -533,7 +540,7 @@ void esc_manual(){
     if(btnUp.isPressed() && scanTerminadoDesdeSonda == true){
       tft.setTextSize(3);
       tft.setCursor(120,132);
-      tft.print(profundidad);
+      tft.print(metros,2);
       tft.print(" m");
       tft.setTextSize(4);
       tft.setCursor(40,88);
@@ -550,7 +557,7 @@ void esc_manual(){
       motorBrake();
       tft.setTextSize(3);
       tft.setCursor(120,132);
-      tft.print(profundidad);
+      tft.print(metros,2);
       tft.print(" m");
       tft.setTextSize(4);
       tft.setCursor(40,88);
@@ -561,7 +568,7 @@ void esc_manual(){
       motorBrake();
       tft.setTextSize(3);
       tft.setCursor(120,132);
-      tft.print(profundidad);
+      tft.print(metros,2);
       tft.print(" m");
       tft.setTextSize(4);
       tft.setCursor(40,88);
@@ -571,7 +578,7 @@ void esc_manual(){
     }else if(btnDown.isPressed() && scanTerminadoDesdeSonda == true && (!hayAgua && !hayTierra)){
       tft.setTextSize(3);
       tft.setCursor(120,132);
-      tft.print(profundidad);
+      tft.print(metros,2);
       tft.print(" m");
       tft.setTextSize(4);
       tft.setCursor(33,88);
@@ -585,16 +592,52 @@ void esc_manual(){
       updateMotorRamp();
       //moverMotor3Cm();
     }else if(btnSelect.wasPressed() && scanTerminadoDesdeSonda == true && (!hayAgua && !hayTierra)){
-      scanTerminadoDesdeSonda = false;
-      comms.sendStartScan(); // comando 23
-      tft.setTextSize(3);
-      tft.setCursor(120,132);
-      tft.print(profundidad);
-      tft.print(" m");
-      tft.setTextSize(4);
-      tft.setCursor(40,88);
-              //"||||||||||"
-      tft.print("Escaneando");
+      comms.sendLinkPing(); // comando 90
+      linkPongRecibido = false;
+      unsigned long inicioTimeout = millis();
+      while (millis() - inicioTimeout < 1000) {
+        processIncomingSerial();
+      }
+      if(!linkPongRecibido){
+        tft.setTextSize(2);
+        printPaddedTextF(tft, xMenu, 88,
+                        ILI9341_WHITE,UI_NAVY, 
+                        1, 1, 0, 0,
+                        "Conexion fallida:  ");
+        tft.fillRect(57, 4, 16, 16, UI_NAVY);
+        tft.drawBitmap(57, 4, epd_bitmap_WARNING, 16, 16, ILI9341_WHITE);
+        //regresando = true;
+        //break;
+      }else{
+        comms.sendVl53StatusQuery(); // comando 53
+        vl53NotReadyFlag = false;
+        unsigned long inicioTimeout = millis();
+        while (millis() - inicioTimeout < 1000) {
+          processIncomingSerial();
+        }
+        if(vl53NotReadyFlag){
+          tft.setTextSize(2);
+          printPaddedTextF(tft, xMenu, 88,
+                          ILI9341_WHITE,UI_NAVY, 
+                          1, 1, 0, 0,
+                          "Sensor fallando:   ");
+          tft.fillRect(35, 4, 16, 16, UI_NAVY);
+          tft.drawBitmap(35, 4, epd_bitmap_WARNING, 16, 16, ILI9341_WHITE);
+          //regresando = true;
+          //break;
+        }else{
+          scanTerminadoDesdeSonda = false;
+          comms.sendStartScan(); // comando 23
+          tft.setTextSize(3);
+          tft.setCursor(120,132);
+          tft.print(metros,2);
+          tft.print(" m");
+          tft.setTextSize(4);
+          tft.setCursor(40,88);
+                  //"||||||||||"
+          tft.print("Escaneando");
+        }
+      }
     }else if(scanTerminadoDesdeSonda == false){
       // Solo intentamos guardar si la inicialización de archivo fue correcta.
       if (!nombreArchivoListo) {
@@ -620,6 +663,13 @@ void esc_manual(){
           crudo.flush();
           crudo.close();
         }
+        if(hayTiempoTotal){
+          FsFile EscaneoTotales = sdInt.open(archivoCrudo, O_WRITE | O_APPEND | O_CREAT);
+          EscaneoTotales.println(EscTotal);
+          EscaneoTotales.flush();
+          EscaneoTotales.close();
+          hayTiempoTotal = false;
+        }
         hayNuevaLecturaVl53 = false;
       }
       //saveSdExt();
@@ -638,8 +688,12 @@ void esc_manual(){
     }
   }
   
-  saveSdExt();
-
+  myEnc.write(0);
+  while(!finalDatos){
+    saveSdExt();
+  }
+  finalDatos = false;
+  
   menu = 1;
   comms.sendEnterMenu();
   cambioModoTitulo();
@@ -687,7 +741,7 @@ void iniciar_controlado() {
   distInicio = 0.00;
   distFinal = 0.00;
 
-  resolucion = 5;
+  resolucion = 4;
   barridos = 1;
 
   // Dibujo de layout general (igual a tu UI)
@@ -895,11 +949,11 @@ void fsm_controlado() {
       }
 
       // Ajuste con repetición automática
-      if (btnUp.isRepeating() && resolucion < 10) {
+      if (btnUp.isRepeating() && resolucion < 8) {
         resolucion++;
         flagBoton = 1;
       }
-      if (btnDown.isRepeating() && resolucion > 0) {
+      if (btnDown.isRepeating() && resolucion > 1) {
         resolucion--;
         flagBoton = 1;
       }
@@ -914,7 +968,7 @@ void fsm_controlado() {
 
       // Select: avanzar a barridos
       if (btnSelect.wasPressed()) {
-        comms.sendResolutionValue((uint8_t)resolucion); // envía 1..10 según indicación
+        comms.sendResolutionValue((uint8_t)resolucion); // envía 1..8 según indicación
         estadoCtrl = CTRL_BARRIDOS;
         ctrlEntry = true;
         flushBotones();
@@ -966,7 +1020,7 @@ void fsm_controlado() {
         printPaddedTextF(tft, 185, 171,
                         UI_NAVY, ILI9341_WHITE,
                         1,1,0,0,
-                        "%d",barridos);
+                        "%d",barridos," ");
         flagBoton = 0;
       }
 
@@ -1056,6 +1110,7 @@ void fsm_controlado() {
       if (flagUndo == 0 && !hayAgua && !hayTierra) {
         int vueltas = inicioControlado;
         int barridoActual = 1;  // siempre inicia en 1
+
         scanTerminadoDesdeSonda = false;
         comms.sendStartScan(); // primer disparo en la profundidad inicial
 
@@ -1116,6 +1171,41 @@ void fsm_controlado() {
               tft.print(distFinal);
               tft.print(" m");
 
+              comms.sendLinkPing(); // comando 90
+              linkPongRecibido = false;
+              unsigned long inicioTimeout = millis();
+              while (millis() - inicioTimeout < 1000) {
+                processIncomingSerial();
+              }
+              if(!linkPongRecibido){
+                tft.setTextSize(2);
+                printPaddedTextF(tft, xMenu, 88,
+                                ILI9341_WHITE,UI_NAVY, 
+                                1, 1, 0, 0,
+                                "Conexion fallida:  ");
+                tft.fillRect(57, 4, 16, 16, UI_NAVY);
+                tft.drawBitmap(57, 4, epd_bitmap_WARNING, 16, 16, ILI9341_WHITE);
+                regresando = true;
+                break;
+              }
+              comms.sendVl53StatusQuery(); // comando 53
+              vl53NotReadyFlag = false;
+              inicioTimeout = millis();
+              while (millis() - inicioTimeout < 1000) {
+                processIncomingSerial();
+              }
+              if(vl53NotReadyFlag){
+                tft.setTextSize(2);
+                printPaddedTextF(tft, xMenu, 88,
+                                ILI9341_WHITE,UI_NAVY, 
+                                1, 1, 0, 0,
+                                "Sensor fallando:   ");    
+                tft.fillRect(35, 4, 16, 16, UI_NAVY);
+                tft.drawBitmap(35, 4, epd_bitmap_WARNING, 16, 16, ILI9341_WHITE);
+                regresando = true;
+                break;
+              }
+
               scanTerminadoDesdeSonda = false;
               comms.sendStartScan(); // comando 23
             } else {
@@ -1164,8 +1254,22 @@ void fsm_controlado() {
         regresando = false;
       }
       motorStop();
-      
       controladoActivo = false;
+      
+      unsigned long inicioTimeout = millis();
+      while (millis() - inicioTimeout < 6500) {
+        motorSetTargetSpeed(255);
+        updateMotorRamp();
+      }
+      motorStop();
+
+      while(true && flagUndo == 0){  //CONFIRMACION PARA SALIR DEL MODO
+        btnSelect.update();
+        if (btnSelect.wasPressed()) {
+          break;
+        }
+      }
+
       menu = 2;
       comms.sendEnterMenu();
       cambioModoTitulo();
@@ -1208,6 +1312,7 @@ void esc_automatico() {
   //scanTerminadoDesdeSonda = true;
 
   flushBotones();
+  
   while (true) {  //  ESPERA A QUE SE INGRESE PROFUNDIDAD
 
     // IMPORTANTÍSIMO: actualizar botones dentro del while (porque es bloqueante)
@@ -1321,6 +1426,42 @@ void esc_automatico() {
           tft.print(" / "); 
           tft.print(profundidad); 
           tft.print(" m");
+
+          comms.sendLinkPing(); // comando 90
+          linkPongRecibido = false;
+          unsigned long inicioTimeout = millis();
+          while (millis() - inicioTimeout < 1000) {
+            processIncomingSerial();
+          }
+          if(!linkPongRecibido){
+            tft.setTextSize(2);
+            printPaddedTextF(tft, xMenu, 88,
+                            ILI9341_WHITE,UI_NAVY, 
+                            1, 1, 0, 0,
+                            "Conexion fallida:  ");
+            tft.fillRect(57, 4, 16, 16, UI_NAVY);
+            tft.drawBitmap(57, 4, epd_bitmap_WARNING, 16, 16, ILI9341_WHITE);
+            regresando = true;
+            break;
+          }
+          comms.sendVl53StatusQuery(); // comando 53
+          vl53NotReadyFlag = false;
+          inicioTimeout = millis();
+          while (millis() - inicioTimeout < 1000) {
+            processIncomingSerial();
+          }
+          if(vl53NotReadyFlag){
+            tft.setTextSize(2);
+            printPaddedTextF(tft, xMenu, 88,
+                            ILI9341_WHITE,UI_NAVY, 
+                            1, 1, 0, 0,
+                            "Sensor fallando:   ");
+            tft.fillRect(35, 4, 16, 16, UI_NAVY);
+            tft.drawBitmap(35, 4, epd_bitmap_WARNING, 16, 16, ILI9341_WHITE);
+            regresando = true;
+            break;
+          }
+
           if(!hayAgua && !hayTierra){
             scanTerminadoDesdeSonda = false;
             comms.sendStartScan(); // comando 23
@@ -1378,6 +1519,13 @@ void esc_automatico() {
   }
   //  DETENER EL MOTOR
   motorStop();
+  
+  unsigned long inicioTimeout = millis();
+  while (millis() - inicioTimeout < 6500) {
+    motorSetTargetSpeed(255);
+    updateMotorRamp();
+  }
+  motorStop();
 
   while(true && flagUndo == 0){  //CONFIRMACION PARA SALIR DEL MODO
     btnSelect.update();
@@ -1415,7 +1563,6 @@ void prueba_sistema(){
   const uint32_t VL53_QUERY_MS = 200;
   const uint32_t PING_MS = 250;
   while(true){
-    
     btnSelect.update();
     baterryCharge();
     btnUndo.update();
@@ -1512,6 +1659,7 @@ void prueba_sistema(){
             // Siguientes 1.5s: hacia arriba.
             motorSetTargetSpeed(-255);
           }
+        motorStop();
 
         int fillW = (porcentaje * (barW - 2)) / 100;
 
@@ -1692,7 +1840,7 @@ void applyPayloadEffects(const SubTerraComms::DecodedPayload& payload){
       break;
 
     case SubTerraComms::CMD_VL53_NOT_READY:
-      vl53ReadyFlag = false;
+      vl53NotReadyFlag = true;
       Serial.println("[MENU] RX CMD 36 -> VL53 no listo");
       break;
 
@@ -1857,6 +2005,7 @@ void saveSdExt(){
       EscaneoTotales.close();
     }
   } else {
+    finalDatos = true;
     Serial.println(F("Error leyendo TempoTimeF.txt"));
     //EscaneoTotales.close();
   }
