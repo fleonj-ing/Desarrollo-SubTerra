@@ -2003,6 +2003,9 @@ void saveSdExt(){
         EscaneoTotales.close();
       }
       crudoRead.close();
+      if (archivoGuardado && !respaldarSdInterna()) {
+        Serial.println(F("Error respaldando archivo final en SD interna"));
+      }
     } else {
       Serial.println(F("Error leyendo crudo.txt"));
       EscaneoTotales.close();
@@ -2013,6 +2016,68 @@ void saveSdExt(){
     //EscaneoTotales.close();
   }
   // ---------------------------------------------------------
+}
+
+bool respaldarSdInterna(){
+  if (nombreArchivo[0] == '\0') {
+    Serial.println(F("No hay nombre de archivo listo para respaldar."));
+    return false;
+  }
+
+  FsFile Archivo = sdExt.open(nombreArchivo, O_RDONLY);
+  if (!Archivo) {
+    Serial.print(F("Error abriendo archivo de respaldo en SD externa: "));
+    Serial.println(nombreArchivo);
+    return false;
+  }
+
+  FsFile copiaInterna = sdInt.open(nombreArchivo, O_WRONLY | O_CREAT | O_TRUNC);
+  if (!copiaInterna) {
+    Serial.print(F("Error creando copia en SD interna: "));
+    Serial.println(nombreArchivo);
+    Archivo.close();
+    return false;
+  }
+
+  uint8_t buffer[512];
+  bool copiaCompleta = true;
+
+  while (true) {
+    int leidos = Archivo.read(buffer, sizeof(buffer));
+    if (leidos < 0) {
+      Serial.println(F("Error leyendo archivo desde SD externa."));
+      copiaCompleta = false;
+      break;
+    }
+    if (leidos == 0) {
+      break;
+    }
+
+    size_t escritos = copiaInterna.write(buffer, (size_t)leidos);
+    if (escritos != (size_t)leidos) {
+      Serial.println(F("Error escribiendo copia en SD interna."));
+      copiaCompleta = false;
+      break;
+    }
+
+    processIncomingSerial();
+    updateMotorRamp();
+  }
+
+  copiaInterna.flush();
+
+  Archivo.close();
+  copiaInterna.close();
+
+  if (!copiaCompleta) {
+    sdInt.remove(nombreArchivo);
+    return false;
+  }
+
+  nombreArchivoListo = true;
+  Serial.print(F("Respaldo en SD interna completado: "));
+  Serial.println(nombreArchivo);
+  return true;
 }
 
 bool crearCrudos(){
